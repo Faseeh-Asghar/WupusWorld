@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wumpus World</title>
+    <style>
+        body {
+            font-family: Arial;
+            background: #1a1a2e;
+            color: #eee;
+            text-align: center;
+            padding: 20px;
+        }
+
+        h1 {
+            color: #f0db4f;
+            margin-bottom: 10px;
+        }
+
+        .controls {
+            margin: 10px;
+        }
+
+        .controls input {
+            width: 50px;
+            padding: 5px;
+        }
+
+        button {
+            padding: 8px 14px;
+            margin: 5px;
+            cursor: pointer;
+            background: #f0db4f;
+            border: none;
+            border-radius: 4px;
+        }
+
+        button:hover {
+            background: #d4af37;
+        }
+
+        #grid {
+            display: inline-block;
+            margin-top: 15px;
+        }
+
+        table {
+            border-collapse: collapse;
+        }
+
+        td {
+            width: 60px;
+            height: 60px;
+            border: 1px solid #555;
+            text-align: center;
+            vertical-align: middle;
+            font-size: 14px;
+            background: #2d2d44;
+            cursor: pointer;
+        }
+
+        .safe {
+            background: #2e7d32;
+        }
+
+        /* green - proven safe */
+        .visited {
+            background: #66bb6a;
+        }
+
+        /* light green - visited */
+        .unknown {
+            background: #616161;
+        }
+
+        /* gray - unknown */
+        .hazard {
+            background: #c62828;
+            color: #fff;
+        }
+
+        /* red - pit/wumpus */
+        .agent {
+            background: #1565c0;
+            color: #fff;
+            font-weight: bold;
+        }
+
+        .info {
+            margin-top: 15px;
+            background: #2d2d44;
+            padding: 10px;
+            display: inline-block;
+            border-radius: 5px;
+        }
+
+        .info p {
+            margin: 4px 0;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Wumpus World - KB Agent</h1>
+    <div class="controls">
+        <label>Rows: <input id="rows" type="number" min="3" max="8" value="4"></label>
+        <label>Cols: <input id="cols" type="number" min="3" max="8" value="4"></label>
+        <button id="newGameBtn">New Game</button>
+        <button id="autoBtn">Auto Move</button>
+        <button id="stopBtn" disabled>Stop</button>
+    </div>
+    <div id="grid"></div>
+    <div id="status" style="margin:10px; font-weight:bold; color:#f0db4f;"></div>
+    <div class="info">
+        <p>Agent at: <span id="pos">(1,1)</span></p>
+        <p>Percept: <span id="percept">None</span></p>
+        <p>Resolution steps: <span id="steps">0</span></p>
+        <p>Moves: <span id="moves">0</span></p>
+    </div>
+
+    <script>
+        function Var(name) { return { type: 'var', name }; }
+        function Not(expr) { return { type: 'not', expr }; }
+        function And(left, right) { return { type: 'and', left, right }; }
+        function Or(left, right) { return { type: 'or', left, right }; }
+        function Implies(l, r) { return Or(Not(l), r); }
+        function Iff(l, r) { return And(Or(Not(l), r), Or(l, Not(r))); }
+
+        function removeImplications(f) {
+            if (f.type == 'implies') {
+                return Or(Not(removeImplications(f.left)), removeImplications(f.right));
+            }
+            if (f.type == 'iff') {
+                let l = removeImplications(f.left);
+                let r = removeImplications(f.right);
+                return And(Or(Not(l), r), Or(l, Not(r)));
+            }
+            if (f.type == 'and') return And(removeImplications(f.left), removeImplications(f.right));
+            if (f.type == 'or') return Or(removeImplications(f.left), removeImplications(f.right));
+            if (f.type == 'not') return Not(removeImplications(f.expr));
+            return f; // var
+        }
+
+        function nnf(f) {
+            if (f.type == 'not') {
+                let inner = f.expr;
+                if (inner.type == 'var') return f;
+                if (inner.type == 'not') return nnf(inner.expr);
+                if (inner.type == 'and') return Or(nnf(Not(inner.left)), nnf(Not(inner.right)));
+                if (inner.type == 'or') return And(nnf(Not(inner.left)), nnf(Not(inner.right)));
+            }
+            if (f.type == 'and') return And(nnf(f.left), nnf(f.right));
+            if (f.type == 'or') return Or(nnf(f.left), nnf(f.right));
+            return f; // var
+        }
+
+        function distribute(f) {
+            if (f.type == 'and') {
+                return distribute(f.left).concat(distribute(f.right));
+            }
+            if (f.type == 'or') {
+                let leftC = distribute(f.left);
+                let rightC = distribute(f.right);
+                let result = [];
+                for (let c1 of leftC) {
+                    for (let c2 of rightC) {
+                        result.push([...c1, ...c2]);
+                    }
+                }
+                return result;
+            }
+            if (f.type == 'var') return [[f.name]];
+            if (f.type == 'not' && f.expr.type == 'var') return [['~' + f.expr.name]];
+            return [];
+        }
+
+        function toCNF(sentence) {
+            let step1 = removeImplications(sentence);
+            let step2 = nnf(step1);
+            return distribute(step2);
+        }
+
+        let totalSteps = 0;
+
+        function negateLit(lit) {
+            if (lit.startsWith('~')) return lit.substring(1);
+            else return '~' + lit;
+        }
+
+        function clauseEqual(c1, c2) {
+            if (c1.length != c2.length) return false;
+            return c1.slice().sort().join(',') == c2.slice().sort().join(',');
+        }
+
+        function containsClause(list, cl) {
+            for (let item of list) {
+                if (clauseEqual(item.clause, cl)) return true;
+            }
+            return false;
+        }
+
+        function isTautology(cl) {
+            for (let lit of cl) {
+                if (cl.includes(negateLit(lit))) return true;
+            }
+            return false;
+        }
+
+        function resolve(c1, c2) {
+            let resList = [];
+            for (let lit of c1) {
+                let comp = negateLit(lit);
+                if (c2.includes(comp)) {
+                    let newClause = [];
+                    for (let l of c1) if (l != lit) newClause.push(l);
+                    for (let l of c2) if (l != comp) newClause.push(l);
+                    let unique = [];
+                    for (let l of newClause) if (!unique.includes(l)) unique.push(l);
+                    if (!isTautology(unique)) resList.push(unique);
+                }
+            }
+            return resList;
+        }
+
+        class KB {
+            constructor() {
+                this.clauses = [];
+            }
+            addClauses(cnfArr) {
+                for (let c of cnfArr) {
+                    if (isTautology(c)) continue;
+                    if (!this.clauses.some(ex => clauseEqual(ex.clause, c))) {
+                        this.clauses.push({ clause: c.slice(), support: false });
+                    }
+                }
+            }
+            tell(sentence) {
+                let cnf = toCNF(sentence);
+                this.addClauses(cnf);
+            }
+            ask(literal) {
+                let negGoal = negateLit(literal);
+                let goalClause = [negGoal];
+                let working = [];
+                for (let c of this.clauses) {
+                    working.push({ clause: c.clause.slice(), support: false });
+                }
+                if (!containsClause(working, goalClause)) {
+                    working.push({ clause: goalClause, support: true });
+                }
+
+                let steps = 0;
+                let maxSteps = 1500; // to avoid infinite loops (I hope it's enough)
+                while (steps < maxSteps) {
+                    let newThisRound = [];
+                    for (let i = 0; i < working.length; i++) {
+                        for (let j = i + 1; j < working.length; j++) {
+                            if (!working[i].support && !working[j].support) continue;
+                            let resolvents = resolve(working[i].clause, working[j].clause);
+                            for (let res of resolvents) {
+                                steps++;
+                                if (steps > maxSteps) break;
+                                if (res.length == 0) {
+                                    totalSteps += steps;
+                                    return true;
+                                }
+                                if (containsClause(working, res) || containsClause(newThisRound, res)) continue;
+                                newThisRound.push({ clause: res, support: true });
+                            }
+                        }
+                    }
+                    if (newThisRound.length == 0) break;
+                    working = working.concat(newThisRound);
+                }
+                totalSteps += steps;
+                return false;
+            }
+        }
+
+        class WumpusGame {
+            constructor(rows, cols) {
+                this.rows = rows;
+                this.cols = cols;
+                this.grid = [];        // 2d array with {pit, wumpus, gold}
+                this.visited = [];     // boolean
+                this.agentR = 0;
+                this.agentC = 0;
+                this.kb = new KB();
+                this.goldR = -1; this.goldC = -1;
+                this.gameOver = false;
+                this.won = false;
+                this.dead = false;
+                this.moveCount = 0;
+
+                this._setupGrid();
+                this.kb.addClauses([['~P_1_1'], ['~W_1_1']]);
+                this._visit(0, 0);
+            }
+
+            _neighbors(r, c) {
+                let n = [];
+                if (r > 0) n.push([r - 1, c]);
+                if (r < this.rows - 1) n.push([r + 1, c]);
+                if (c > 0) n.push([r, c - 1]);
+                if (c < this.cols - 1) n.push([r, c + 1]);
+                return n;
+            }
+
+            _setupGrid() {
+                for (let r = 0; r < this.rows; r++) {
+                    this.grid[r] = [];
+                    this.visited[r] = [];
+                    for (let c = 0; c < this.cols; c++) {
+                        this.grid[r][c] = { pit: false, wumpus: false, gold: false };
+                        this.visited[r][c] = false;
+                    }
+                }
+
+                let safe = new Set();
+                safe.add('0,0');
+                let startNeighbors = this._neighbors(0, 0);
+                for (let [r, c] of startNeighbors) safe.add(r + ',' + c);
+
+                let total = this.rows * this.cols;
+                let numPits = Math.max(1, Math.floor(total * 0.2));
+                let allCells = [];
+                for (let r = 0; r < this.rows; r++) for (let c = 0; c < this.cols; c++) allCells.push([r, c]);
+                let risky = allCells.filter(([r, c]) => !safe.has(r + ',' + c));
+                for (let i = risky.length - 1; i > 0; i--) {
+                    let j = Math.floor(Math.random() * (i + 1));
+                    [risky[i], risky[j]] = [risky[j], risky[i]];
+                }
+                for (let i = 0; i < numPits; i++) {
+                    let [r, c] = risky[i];
+                    this.grid[r][c].pit = true;
+                }
+
+                let wumpCandidates = allCells.filter(([r, c]) => !safe.has(r + ',' + c) && !this.grid[r][c].pit);
+                if (wumpCandidates.length == 0) wumpCandidates = risky; // fallback
+                let [wr, wc] = wumpCandidates[Math.floor(Math.random() * wumpCandidates.length)];
+                this.grid[wr][wc].wumpus = true;
+
+                let goldCandidates = allCells.filter(([r, c]) => !safe.has(r + ',' + c) && !this.grid[r][c].pit && !this.grid[r][c].wumpus);
+                if (goldCandidates.length > 0) {
+                    let [gr, gc] = goldCandidates[Math.floor(Math.random() * goldCandidates.length)];
+                    this.grid[gr][gc].gold = true;
+                    this.goldR = gr; this.goldC = gc;
+                }
+            }
+
+            _percept(r, c) {
+                let breeze = false, stench = false;
+                let glitter = (this.grid[r][c].gold && this.visited[r][c]) ? true : false;
+                for (let [nr, nc] of this._neighbors(r, c)) {
+                    if (this.grid[nr][nc].pit) breeze = true;
+                    if (this.grid[nr][nc].wumpus) stench = true;
+                }
+                return { breeze, stench, glitter };
+            }
+
+            _visit(r, c) {
+                if (this.gameOver) return;
+                this.visited[r][c] = true;
+                // check death
+                if (this.grid[r][c].pit || this.grid[r][c].wumpus) {
+                    this.gameOver = true;
+                    this.dead = true;
+                    return;
+                }
+                if (this.grid[r][c].gold) {
+                    this.gameOver = true;
+                    this.won = true;
+                    return;
+                }
+
+                let { breeze, stench } = this._percept(r, c);
+                let neighbors = this._neighbors(r, c);
+                let breezeVar = Var('B_' + (r + 1) + '_' + (c + 1));
+                if (neighbors.length > 0) {
+                    let pitList = neighbors.map(([nr, nc]) => Var('P_' + (nr + 1) + '_' + (nc + 1)));
+                    let rightOr = pitList.reduce((a, b) => Or(a, b));
+                    this.kb.tell(Iff(breezeVar, rightOr));
+                } else {
+                    this.kb.tell(Not(breezeVar));
+                }
+                let stenchVar = Var('S_' + (r + 1) + '_' + (c + 1));
+                if (neighbors.length > 0) {
+                    let wumList = neighbors.map(([nr, nc]) => Var('W_' + (nr + 1) + '_' + (nc + 1)));
+                    let rightOr = wumList.reduce((a, b) => Or(a, b));
+                    this.kb.tell(Iff(stenchVar, rightOr));
+                } else {
+                    this.kb.tell(Not(stenchVar));
+                }
+                this.kb.tell(breeze ? breezeVar : Not(breezeVar));
+                this.kb.tell(stench ? stenchVar : Not(stenchVar));
+            }
+
+            move(r, c) {
+                if (this.gameOver) return false;
+                if (Math.abs(r - this.agentR) + Math.abs(c - this.agentC) != 1) return false;
+                this.agentR = r; this.agentC = c; this.moveCount++;
+                if (!this.visited[r][c]) this._visit(r, c);
+                return true;
+            }
+
+            status(r, c) {
+                if (this.visited[r][c]) return 'visited';
+                if (this.gameOver) return 'unknown';
+                let noPit = this.kb.ask('~P_' + (r + 1) + '_' + (c + 1));
+                let noWumpus = this.kb.ask('~W_' + (r + 1) + '_' + (c + 1));
+                if (noPit && noWumpus) return 'safe';
+                let pit = this.kb.ask('P_' + (r + 1) + '_' + (c + 1));
+                let wumpus = this.kb.ask('W_' + (r + 1) + '_' + (c + 1));
+                if (pit || wumpus) return 'hazard';
+                return 'unknown';
+            }
+        }
+
+        let game = null;
+        let autoTimer = null;
+
+        function render() {
+            if (!game) return;
+            let html = '<table>';
+            for (let r = 0; r < game.rows; r++) {
+                html += '<tr>';
+                for (let c = 0; c < game.cols; c++) {
+                    let cls = game.status(r, c);
+                    let disp = '';
+                    if (r == game.agentR && c == game.agentC) {
+                        disp = 'A';
+                        cls += ' agent';
+                    }
+                    if (game.grid[r][c].gold && (game.visited[r][c] || game.gameOver)) disp += 'G';
+                    if (game.visited[r][c]) {
+                        let p = game._percept(r, c);
+                        if (p.breeze) disp += '~';
+                        if (p.stench) disp += 'S';
+                    }
+                    if (disp == '') disp = (r + 1) + ',' + (c + 1);
+                    html += `<td class="${cls}" onclick="cellClick(${r},${c})">${disp}</td>`;
+                }
+                html += '</tr>';
+            }
+            html += '</table>';
+            document.getElementById('grid').innerHTML = html;
+            document.getElementById('pos').textContent = `(${game.agentR + 1},${game.agentC + 1})`;
+            let p = game._percept(game.agentR, game.agentC);
+            let ptxt = [];
+            if (p.breeze) ptxt.push('Breeze');
+            if (p.stench) ptxt.push('Stench');
+            if (p.glitter) ptxt.push('Glitter');
+            document.getElementById('percept').textContent = ptxt.join(', ') || 'None';
+            document.getElementById('steps').textContent = totalSteps;
+            document.getElementById('moves').textContent = game.moveCount;
+            let msg = '';
+            if (game.won) msg = 'YOU WIN! Gold found.';
+            else if (game.dead) msg = 'DEAD. Game Over.';
+            document.getElementById('status').textContent = msg;
+            // buttons
+            document.getElementById('autoBtn').disabled = game.gameOver;
+            document.getElementById('stopBtn').disabled = !autoTimer;
+        }
+
+        function cellClick(r, c) {
+            if (!game || game.gameOver) return;
+            if (Math.abs(r - game.agentR) + Math.abs(c - game.agentC) != 1) return; // must be adjacent
+            let st = game.status(r, c);
+            if (st == 'safe' || st == 'visited') {
+                game.move(r, c);
+                render();
+            }
+        }
+
+        function newGame() {
+            if (autoTimer) stopAuto();
+            let rows = parseInt(document.getElementById('rows').value);
+            let cols = parseInt(document.getElementById('cols').value);
+            if (isNaN(rows) || isNaN(cols) || rows < 3 || cols < 3) { alert('Min 3x3'); return; }
+            totalSteps = 0;
+            game = new WumpusGame(rows, cols);
+            render();
+        }
+
+        function autoMove() {
+            if (!game || game.gameOver) { stopAuto(); return; }
+            let r = game.agentR, c = game.agentC;
+            let neighbors = game._neighbors(r, c);
+            let moved = false;
+            for (let [nr, nc] of neighbors) {
+                if (!game.visited[nr][nc] && game.status(nr, nc) == 'safe') {
+                    game.move(nr, nc);
+                    render();
+                    moved = true;
+                    break;
+                }
+            }
+            if (!moved) {
+                for (let [nr, nc] of neighbors) {
+                    if (game.visited[nr][nc]) {
+                        game.move(nr, nc);
+                        render();
+                        moved = true;
+                        break;
+                    }
+                }
+            }
+            if (!moved || game.gameOver) stopAuto();
+        }
+
+        function startAuto() {
+            if (autoTimer) clearInterval(autoTimer);
+            autoTimer = setInterval(autoMove, 700);
+            render();
+        }
+
+        function stopAuto() {
+            if (autoTimer) { clearInterval(autoTimer); autoTimer = null; }
+            render();
+        }
+
+        document.getElementById('newGameBtn').addEventListener('click', newGame);
+        document.getElementById('autoBtn').addEventListener('click', startAuto);
+        document.getElementById('stopBtn').addEventListener('click', stopAuto);
+
+        newGame();
+    </script>
+</body>
+
+</html>
