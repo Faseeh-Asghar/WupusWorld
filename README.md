@@ -1,291 +1,277 @@
 # Wumpus World - Knowledge-Based Agent
 
-## 📋 Overview
+## What is This?
 
-This project implements a **Knowledge-Based Agent** that navigates the classic **Wumpus World**, a famous AI problem in propositional logic. The agent uses **logical inference** (CNF conversion and resolution-based theorem proving) to determine which cells are safe to visit based on perceived sensations (breeze, stench, and glitter).
+So basically, this is a Wumpus World game where an AI agent has to navigate a grid and find gold. The cool part? It uses **actual logic** to figure out which cells are safe instead of just guessing.
 
-### Objective
-- Find the **gold** without running into **pits** or the **Wumpus**
-- Use propositional logic to infer safe cells
-- Explore the world efficiently with limited knowledge
-
----
-
-## 🎮 Game Mechanics
-
-### World Elements
-- **Agent (A)**: The player navigates the grid using logic
-- **Pits**: Deadly obstacles that cause a "breeze" in adjacent cells
-- **Wumpus (W)**: A monster that causes a "stench" in adjacent cells
-- **Gold (G)**: The objective to find and collect
-- **Empty Cells**: Safe to visit
-
-### Percepts (Sensations)
-- **Breeze (~)**: Detected when adjacent to a pit
-- **Stench (S)**: Detected when adjacent to the Wumpus
-- **Glitter**: Detected when the agent is on the same cell as gold
-- **None**: Perceived when in a safe, isolated cell
-
-### Cell Status Colors
-| Color | Status | Meaning |
-|-------|--------|---------|
-| 🟩 Light Green | **Visited** | Already explored and proven safe |
-| 🟩 Dark Green | **Safe** | Logically proven to be safe (no pit/Wumpus) |
-| 🟨 Gray | **Unknown** | Not enough information to determine |
-| 🟥 Red | **Hazard** | Contains pit or Wumpus (proven dangerous) |
-| 🔵 Blue | **Agent** | Current agent position |
+The agent:
+- Uses propositional logic and inference (CNF conversion + resolution) to deduce where dangers are
+- Finds gold while avoiding pits and the Wumpus
+- Only moves to cells it can logically prove are safe
+- Gets smarter as it gathers more information
 
 ---
 
-## 🧠 Propositional Logic & Inference Engine
+## Game Mechanics
 
-The core of this agent is a **logical reasoning system** based on propositional logic.
+### What's in the World?
+- **Agent (A)**: That's you - navigates using logic
+- **Pits**: Deadly holes that make a "breeze" in nearby cells
+- **Wumpus**: The monster - makes a "stench" in nearby cells
+- **Gold (G)**: What you're looking for
+- **Empty Cells**: Safe places
 
-### Logical Operators Implemented
+### What the Agent Feels
+- **Breeze (~)**: There's a pit nearby
+- **Stench (S)**: The Wumpus is nearby
+- **Glitter**: Gold is in this cell
+- **Nothing**: You're in a safe, isolated spot
+
+### What the Colors Mean
+| Color | Meaning |
+|-------|----------|
+| 🟩 Light Green | Already been here - it's safe |
+| 🟩 Dark Green | Logic says it's safe (no pit/Wumpus) |
+| 🟨 Gray | Dunno yet - need more info |
+| 🟥 Red | Danger! Has a pit or Wumpus |
+| 🔵 Blue | Agent is here |
+
+---
+
+## How the Logic Actually Works
+
+Okay so at the heart of this is a simple idea: use propositional logic to reason about the world.
+
+### The Logical Operators
 ```javascript
-Var(name)           // Create a variable (e.g., P_1_1 for "pit at row 1, col 1")
-Not(expr)           // Negation: ¬
-And(left, right)    // Conjunction: ∧
-Or(left, right)     // Disjunction: ∨
-Implies(l, r)       // Implication: → (converted to ¬l ∨ r)
-Iff(l, r)           // Biconditional: ↔ (converted to (¬l ∨ r) ∧ (l ∨ ¬r))
+Var(name)           // A variable (like P_1_1 = "pit at row 1, col 1")
+Not(expr)           // NOT - ¬
+And(left, right)    // AND - ∧
+Or(left, right)     // OR - ∨
+Implies(l, r)       // IF...THEN - → (becomes ¬l ∨ r)
+Iff(l, r)           // IF AND ONLY IF - ↔ (becomes two expressions)
 ```
 
-### CNF Conversion Pipeline
+### Converting Logic to CNF (Conjunctive Normal Form)
 
-All logical sentences are converted to **Conjunctive Normal Form (CNF)** before inference:
+Before the agent can reason, all statements get converted to CNF. It's like translating everything to the same language. Here's how:
 
-1. **Remove Implications & Biconditionals**
-   - `A → B` becomes `¬A ∨ B`
-   - `A ↔ B` becomes `(¬A ∨ B) ∧ (A ∨ ¬B)`
+1. **Get rid of arrows and if-and-only-if stuff**
+   - `A → B` becomes `¬A ∨ B` (if A then B = not A or B)
+   - `A ↔ B` becomes two clauses: `(¬A ∨ B) ∧ (A ∨ ¬B)`
 
-2. **Convert to Negation Normal Form (NNF)**
-   - Apply **De Morgan's Laws**: `¬(A ∧ B) = ¬A ∨ ¬B`
-   - Move negations inward to only apply to variables
-   - Eliminate double negations: `¬¬A = A`
+2. **Move the NOTs inward (NNF)**
+   - Use De Morgan's Laws: `¬(A ∧ B) = ¬A ∨ ¬B`
+   - Get rid of double negations: `¬¬A` just becomes `A`
 
 3. **Distribute OR over AND**
-   - Convert to CNF clauses (disjunction of literals)
-   - Example: `(A ∨ B) ∧ (C ∨ D)` remains as two clauses
+   - Break it into clauses (lists of stuff ORed together)
+   - Example: `(A ∨ B) ∧ (C ∨ D)` is two separate clauses
 
-### Resolution-Based Theorem Proving
+### How Resolution Works (Proving Things)
 
-The agent uses **SLD Resolution** with **Set of Support** strategy to answer queries:
+So when the agent asks "is this cell safe?", here's what happens:
 
 ```javascript
 ask(literal) {
-    1. Negate the query: "ask P" → add "¬P" to working set
-    2. Repeatedly resolve clauses until:
-       - Empty clause found → Query is TRUE (proven)
-       - No new clauses → Query is FALSE (not provable)
-    3. Only resolve when at least one clause is in support set (optimization)
+    1. Flip the question: "is P true?" becomes "¬P" (assume it's false)
+    2. Try to find a contradiction:
+       - If you get an empty clause → the answer is YES (proven)
+       - If nothing new comes up → the answer is NO (can't prove it)
+    3. Only mix clauses that have at least one from the "support" (optimization trick)
 }
 ```
 
-**Set of Support Strategy**: Only performs resolution when at least one clause is in the "support" (derived clauses or negated goal). This prevents redundant combinations and improves efficiency.
+**Set of Support**: This just means we're smart about which clauses we combine. Instead of trying every possible combo (which would take forever), we only mix new stuff with old stuff. Makes it way faster.
 
-### Knowledge Base Rules
+### What the Agent Learns at Each Cell
 
-When the agent visits a cell at `(r, c)`:
+Every time the agent visits a cell at `(r, c)`, it learns:
 
-1. **Breeze Rule** (for each neighbor):
+1. **The Breeze Rule**:
    ```
-   Breeze ↔ (Pit_neighbor1 ∨ Pit_neighbor2 ∨ ...)
+   Breeze ↔ (at least one neighbor has a pit)
    ```
-   "There's a breeze if and only if there's at least one pit nearby"
+   Pretty obvious - if you feel a breeze, there's a pit nearby
 
-2. **Stench Rule** (for each neighbor):
+2. **The Stench Rule**:
    ```
-   Stench ↔ (Wumpus_neighbor1 ∨ Wumpus_neighbor2 ∨ ...)
+   Stench ↔ (at least one neighbor has the Wumpus)
    ```
-   "There's a stench if and only if there's a Wumpus nearby"
+   Same logic for stench
 
-3. **Percept Truth Values**:
+3. **What it Actually Felt**:
    ```
-   Breeze = true/false    (based on actual sensation)
-   Stench = true/false    (based on actual sensation)
+   Breeze = yes or no    (what the agent felt)
+   Stench = yes or no    (what the agent felt)
    ```
 
 ---
 
-## 🏗️ Architecture & Code Structure
+## Code Structure
 
 ### Main Classes
 
-#### `KB` - Knowledge Base
-Manages logical reasoning and queries:
-- `addClauses(cnfArr)` - Add CNF clauses to knowledge base
-- `tell(sentence)` - Add a logical sentence (automatically converts to CNF)
-- `ask(literal)` - Query the knowledge base using resolution
+#### `KB` - The Brain (Knowledge Base)
+This stores all the logic and answers questions:
+- `addClauses(cnfArr)` - Stores CNF clauses
+- `tell(sentence)` - Adds new facts (converts them to CNF automatically)
+- `ask(literal)` - Answers "is this true?" using resolution
 
-#### `WumpusGame` - Game State & Logic
-Maintains the game world and agent position:
-- `_setupGrid()` - Randomly generate pits, Wumpus, and gold
-- `_visit(r, c)` - Visit a cell and add percepts to KB
-- `_percept(r, c)` - Get sensations at a location
-- `move(r, c)` - Move agent to adjacent cell
-- `status(r, c)` - Determine if cell is safe/hazard/unknown
+#### `WumpusGame` - The Game
+Handles the world and the agent:
+- `_setupGrid()` - Creates pits, Wumpus, and gold randomly
+- `_visit(r, c)` - Agent enters a cell and learns from it
+- `_percept(r, c)` - What does the agent feel here?
+- `move(r, c)` - Move the agent one step
+- `status(r, c)` - Is this cell safe/danger/unknown?
 
-### Logical Inference Functions
+### Helper Functions (The Logic Stuff)
 
-| Function | Purpose |
-|----------|---------|
-| `removeImplications(f)` | Replace `→` and `↔` with basic operators |
-| `nnf(f)` | Convert to Negation Normal Form |
-| `distribute(f)` | Convert to CNF by distributing OR over AND |
-| `toCNF(sentence)` | Complete CNF conversion pipeline |
-| `resolve(c1, c2)` | Resolution rule: find complementary literals |
-| `clauseEqual(c1, c2)` | Check if two clauses are logically equivalent |
-| `isTautology(cl)` | Detect tautologies (P ∨ ¬P) and filter them |
-| `negateLit(lit)` | Negate a literal (toggle `~` prefix) |
+| Function | What it Does |
+|----------|----------|
+| `removeImplications(f)` | Get rid of arrows and if-and-only-if |
+| `nnf(f)` | Move NOTs inward |
+| `distribute(f)` | Break into clauses (CNF) |
+| `toCNF(sentence)` | Do all three steps above |
+| `resolve(c1, c2)` | Find contradictions (resolution rule) |
+| `clauseEqual(c1, c2)` | Check if two clauses are the same |
+| `isTautology(cl)` | Skip useless stuff like (A OR NOT A) |
+| `negateLit(lit)` | Flip a literal (P becomes NOT P) |
 
-### UI Functions
+### The Game Interface
 
-| Function | Purpose |
-|----------|---------|
-| `render()` | Redraw grid and update dashboard |
-| `cellClick(r, c)` | Handle manual agent movement |
-| `newGame()` | Create new game instance |
-| `autoMove()` | Agent moves automatically to safe cells |
-| `startAuto()` / `stopAuto()` | Control automatic exploration |
-
----
-
-## 🚀 How to Use
-
-### 1. Open the Application
-Simply open `index.html` in a modern web browser:
-```bash
-# No installation needed - pure HTML/JavaScript
-```
-
-### 2. Configure the Game
-Before starting:
-- **Rows**: Set grid height (3-8)
-- **Cols**: Set grid width (3-8)
-
-### 3. Play the Game
-
-#### Manual Movement
-1. Click **"New Game"** to start
-2. Click on **green (safe) or light green (visited)** adjacent cells to move
-3. The agent cannot move diagonally or through unknown/hazard cells
-
-#### Automatic Exploration
-1. Click **"Auto Move"** to let the agent explore automatically
-2. The agent explores safe, unvisited cells first
-3. If stuck, it backtracks to visited cells
-4. Click **"Stop"** to pause automatic exploration
-
-### 4. Monitor Inference
-The dashboard shows:
-- **Agent Position**: Current location (e.g., "1,1")
-- **Percept**: Current sensations (Breeze, Stench, Glitter, or None)
-- **Resolution Steps**: Total logical inference steps performed
-- **Moves**: Total cells visited
-
-### 5. Win Conditions
-- **✅ Win**: Find and collect the gold
-- **❌ Loss**: Step into a pit or encounter the Wumpus
-- **⚠️ Stuck**: No safe moves available
+| Function | What it Does |
+|----------|----------|
+| `render()` | Draw the grid and update the dashboard |
+| `cellClick(r, c)` | Handle when you click a cell |
+| `newGame()` | Start a fresh game |
+| `autoMove()` | Agent automatically moves to safe cells |
+| `startAuto()` / `stopAuto()` | Turn auto-mode on/off |
 
 ---
 
-## 📊 Algorithm Complexity
+## How to Play
 
-| Operation | Complexity | Notes |
-|-----------|-----------|-------|
-| CNF Conversion | O(2^n) | Worst case for distribute (exponential clauses) |
-| Resolution Query | O(n²) per step | n = number of clauses, worst case unbounded |
-| Cell Status Check | O(n²) | Calls `ask()` twice |
-| Game Rendering | O(rows × cols) | Linear in grid size |
+### Getting Started
+Just open `index.html` in your browser. That's it. No installation.
 
-**Optimization Used**: Set of Support strategy reduces search space significantly by preventing unnecessary clause combinations.
+### Set It Up
+- Pick how many rows (3-8)
+- Pick how many columns (3-8)
+- Hit "New Game"
+
+### Play It
+
+**Manual Mode:**
+1. Click "New Game"
+2. Click on green cells next to you to move
+3. You can only move one step at a time
+4. Can't go through dangerous (red) or unknown (gray) cells
+
+**Auto Mode (Let the AI Play):**
+1. Click "Auto Move"
+2. Agent automatically explores safe cells
+3. If it gets stuck, it backtracks
+4. Click "Stop" to pause
+
+### What You're Watching
+- **Agent at**: Where the agent is right now
+- **Percept**: What the agent is feeling (Breeze, Stench, Glitter, or nothing)
+- **Resolution steps**: How many logic operations happened
+- **Moves**: How many cells visited
+
+### Win/Lose/Stuck
+- **Win**: Find the gold
+- **Lose**: Step on a pit or Wumpus
+- **Stuck**: Can't move anywhere safe
 
 ---
 
-## 🎯 Key Insights
+## Performance Stuff (Big O Notation)
 
-### Why This Works
-1. **Sound Logic**: Resolution-based inference is mathematically sound
-2. **Incomplete But Practical**: Cannot prove negative facts directly, but sufficient for this domain
-3. **Incremental Learning**: Each cell visit adds new constraints, improving inference
-4. **Efficient Exploration**: Only visits cells proven safe by logical deduction
+| What | Speed | Notes |
+|-----|-------|-------|
+| Converting to CNF | O(2^n) | Can get exponential in worst case |
+| Asking a question | O(n²) per try | n = number of facts we know |
+| Check if cell is safe | O(n²) | Actually asks twice |
+| Drawing the grid | O(rows × cols) | Pretty fast |
 
-### Limitations
-1. **No Open World Assumption**: Assumes only pit/Wumpus/gold exist
-2. **Resolution Method**: Can be slow for large knowledge bases (mitigated with Set of Support)
-3. **Maximum 1500 Resolution Steps**: Safety limit to prevent infinite loops
-4. **Grid Size**: Limited to 3-8 to keep computation manageable
+**The Speed Trick**: Set of Support makes it way faster by not trying stupid combinations of facts.
 
 ---
 
-## 📝 Example Walkthrough
+## Why This Actually Works
 
-### Initial State
-```
-Agent at (1,1), no percepts
-KB contains: ¬P_1_1 ∧ ¬W_1_1
-```
+**The Good Parts:**
+- The logic is mathematically correct
+- It learns more as it explores
+- It only goes where it can prove it's safe
+- Resolution is a proven method
 
-### Visit Cell (1,2)
-```
-Percept: Breeze detected
-KB adds: B_1_2 ↔ (P_1_1 ∨ P_1_2 ∨ P_2_2)
-KB adds: B_1_2 = true
-```
+**The Catch:**
+- Can't directly prove negative stuff ("there's NO pit here") - only positive stuff
+- Gets slow with lots of facts (but Set of Support helps a lot)
+- Has a safety limit of 1500 logic steps (prevents infinite loops)
+- Only works on 3-8 grids (anything bigger gets too slow)
+- Assumes the world only has pits, Wumpus, and gold (nothing else)
 
-### Query: Is (1,2) safe?
+---
+
+## Example: How the Agent Thinks
+
+**At the start:**
+Agent is at (1,1). We tell it: "No pit here, no Wumpus here."
+
+**Agent moves to (1,2):**
+Feels a breeze. So it learns: "There's a pit nearby (at 1,1, 1,2, or 2,2)"
+
+**Agent asks: "Is (1,2) safe?"**
 ```
-ask('~P_1_2'):
-  - We know: B_1_2 = true (breeze exists)
-  - We know: ¬P_1_1 = true (safe at start)
-  - From Iff: If B_1_2 is true, at least one neighbor has pit
-  - Cannot prove ¬P_1_2 → returns UNKNOWN
-  
-Result: Cell (1,2) stays UNKNOWN (potentially dangerous)
+KB knows:
+- Breeze exists at (1,2)
+- No pit at (1,1) 
+- So... at least one of: (1,2) or (2,2) has a pit
+
+Can we prove no pit at (1,2)? NO.
+Can we prove there IS a pit? NO.
+
+Result: UNKNOWN (be careful!)
 ```
 
 ---
 
-## 🛠️ Technical Stack
+## Tech Stack
 
-- **Language**: JavaScript (ES6)
-- **Rendering**: HTML Canvas Table
-- **Styling**: CSS with dark theme
-- **No Dependencies**: Pure vanilla JavaScript, no external libraries
-
----
-
-## 📚 References
-
-This implementation is based on:
-- Russell & Norvig: "Artificial Intelligence: A Modern Approach"
-- Chapter 7-9: Logical Agents & Inference
-- Wumpus World problem (classic AI teaching domain)
-- SLD Resolution with Set of Support strategy
+- **Language**: JavaScript (just vanilla JS, no frameworks)
+- **Rendering**: HTML table
+- **Styling**: CSS (dark theme)
+- **Dependencies**: None (it's all one file)
 
 ---
 
-## 🤝 Notes for Assignment
+## Where This Comes From
 
-### What This Demonstrates
-✅ Propositional Logic Implementation  
-✅ CNF Conversion (3 pipeline steps)  
-✅ Resolution-Based Inference  
-✅ Set of Support Optimization  
-✅ Knowledge Base Management  
-✅ Logical Agent Architecture  
-✅ Safe Exploration Strategy  
-
-### Key Algorithm Components
-- De Morgan's Laws application
-- Tautology detection and filtering
-- Clause normalization and comparison
-- Lemma caching (avoiding duplicate clauses)
+- Russell & Norvig's "Artificial Intelligence: A Modern Approach" (the textbook)
+- Wumpus World is like the Hello World of AI problems
+- Resolution is a standard logic inference method
+- Set of Support is a known optimization
 
 ---
 
-**Author**: AI Assignment 06  
-**Date**: 2024  
-**Status**: ✅ Complete Implementation
+## What This Shows (For Your Assignment)
+
+✅ Propositional logic (Var, Not, And, Or, etc.)  
+✅ Converting to CNF (3 steps)  
+✅ Resolution-based reasoning  
+✅ Set of Support (smart optimization)  
+✅ Knowledge base that learns  
+✅ Safe exploration using logic  
+✅ De Morgan's Laws  
+✅ Tautology filtering  
+✅ Clause comparison  
+✅ Avoiding duplicate facts  
+
+---
+
+**AI Assignment 06** | 2024
